@@ -1,0 +1,213 @@
+1、搭建Redis5.0集群，要求三主三从，记录下安装步骤；
+	第一步：创建7001实例，并复制redis.conf文件
+		# 编译安装
+		cd /opt/lagou/software/redis-5.0.5/src
+		make install PREFIX=/root/redis-cluster/7001
+		# 复制redis.conf文件
+		cp /opt/lagou/software/redis-5.0.5/redis.conf /root/redis-cluster/7001/bin/ 
+	第二步：修改redis.conf配置文件
+		vi /root/redis-cluster/7001/bin/redis.conf
+		# 修改port为7001
+		port 7001
+		# 打开cluster-enable yes
+		cluster-enable yes
+		# 配置后端开启模式
+		# 将`daemonize`由`no`改为`yes`
+		daemonize yes
+		# 默认绑定的是回环地址，默认不能被其他机器访问
+		# bind 127.0.0.1
+		# 所有机器可以访问
+		# bind 0.0.0.0
+		# 是否开启保护模式，由yes该为no
+		protected-mode no
+	第三步：复制7001，创建7002~7008实例，注意端口的修改
+		# 拷贝7001
+		cp -r /root/redis-cluster/7001 /root/redis-cluster/700*
+		# 重新修改：先删除再复制新的redis.conf文件
+		# 好处：只需要先修改7001的配置文件，再复制，再修改port即可
+		# rm -rf /root/redis-cluster/700*/bin/redis.conf
+		# cp /root/redis-cluster/7001/bin/redis.conf /root/redis-cluster/700*/bin/redis.conf
+		# 修改对应的端口号
+		vi /root/redis-cluster/7002/bin/redis.conf
+	第四部：创建start.sh，启动所有实例
+		# 编写群起脚本
+		cd /root/redis-cluster/;vi start-local-redis-cluster.sh
+		# 启动7001
+		cd /root/redis-cluster/7001/bin;redis-server redis.conf
+		# 启动7002
+		cd /root/redis-cluster/7002/bin;redis-server redis.conf
+		# 启动7003
+		cd /root/redis-cluster/7003/bin;redis-server redis.conf
+		# 启动7004
+		cd /root/redis-cluster/7004/bin;redis-server redis.conf
+		# 启动7005
+		cd /root/redis-cluster/7005/bin;redis-server redis.conf
+		# 启动7006
+		cd /root/redis-cluster/7006/bin;redis-server redis.conf
+		# 启动指令
+		cd /root/redis-cluster/;bash start-local-redis-cluster.sh
+		进入客户端
+		/root/redis-cluster/7001/bin/redis-cli -h linux121 -p 700
+		创建stop.sh，关闭所有的实例
+		# 编写群起脚本
+		cd /root/redis-cluster/;vi stop-local-redis-cluster.sh
+		# 关闭7001
+		cd /root/redis-cluster/7001/bin;redis-cli -h linux121 -p 7001 shutdown
+		# 关闭7002
+		cd /root/redis-cluster/7002/bin;redis-cli -h linux121 -p 7002 shutdown
+		# 关闭7003
+		cd /root/redis-cluster/7003/bin;redis-cli -h linux121 -p 7003 shutdown
+		# 启关闭7004
+		cd /root/redis-cluster/7004/bin;redis-cli -h linux121 -p 7004 shutdown
+		# 关闭7005
+		cd /root/redis-cluster/7005/bin;redis-cli -h linux121 -p 7005 shutdown
+		# 关闭7006
+		cd /root/redis-cluster/7006/bin;redis-cli -h linux121 -p 7006 shutdown
+		# Redis集群关闭指令
+		cd /root/redis-cluster/;bash stop-local-redis-cluster.sh
+	第五步：创建Redis集群（创建时Redis中不要有数据）
+		# 删除集群遗留任何数据
+		# cd /root/redis-cluster/700*/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7001/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7002/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7003/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7004/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7005/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7006/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7007/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		cd /root/redis-cluster/7008/bin/;rm -rf dump.rdb nodes.conf appendonly.aof
+		# 创建集群
+		# 注：必须写192.168.1.121（而不是linux121），否则出现：
+		# 1)ERR Invalid node address specified: linux121:7001;
+		# 2)jedis-2.9.0：Exception in thread "main" redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool. Caused by: redis.clients.jedis.exceptions.JedisConnectionException: java.net.ConnectException: Connection refused: connect;
+		# 3)jedis-2.9.3：redis.clients.jedis.exceptions.JedisClusterMaxRedirectionsException: Too many Cluster redirections?
+		cd /root/redis-cluster/7001/bin;redis-cli --cluster create 192.168.1.121:7001 192.168.1.121:7002 192.168.1.121:7003 192.168.1.121:7004 192.168.1.121:7005 192.168.1.121:7006 --cluster-replicas 1
+2、能够添加一主一从（Master4和Slaver4），记录下安装步骤；
+	1、添加主节点
+	# 启动node7007
+	cd /root/redis-cluster/7007/bin;redis-server redis.conf
+	# 添加node7007为集群主节点
+	cd /root/redis-cluster/7007/bin/;redis-cli --cluster add-node 192.168.1.121:7007 192.168.1.121:7001
+	2、为新添加的主节点分配slots槽
+	cd /root/redis-cluster/7007/bin/;redis-cli --cluster reshard 192.168.1.121:7007
+	# How many slots do you want to move(from 1 to 16384)?
+	# 输入3000（数值不超过18364）
+	3000	 
+	# 输入分slots的主节点ID（新添加的主节点ID）
+	04969194dd9b051d16dc41ef8cd4a72a71f03c51
+	# 通过cluster nodes可查看 
+	# 选择分槽方式
+	# 选择all
+	all
+	# 一直输入yes继续完成
+	yes
+	3、为新添加的主节点添加一个从节点
+	# 启动node7008
+	cd /root/redis-cluster/7008/bin;redis-server redis.conf
+	# 为新添加的主节点添加从节点
+	cd /root/redis-cluster/7007/bin/;redis-cli --cluster add-node 192.168.1.121:7008 192.168.1.121:7007 --cluster-slave --cluster-master-id 04969194dd9b051d16dc41ef8cd4a72a71f03c51
+	4、创建start.sh，启动所有实例（7001~7008）
+	# 编写群起脚本
+	cd /root/redis-cluster/;vi start-local-redis-cluster.sh
+	 
+	# 启动7001
+	cd /root/redis-cluster/7001/bin;redis-server redis.conf
+	# 启动7002
+	cd /root/redis-cluster/7002/bin;redis-server redis.conf
+	# 启动7003
+	cd /root/redis-cluster/7003/bin;redis-server redis.conf
+	# 启动7004
+	cd /root/redis-cluster/7004/bin;redis-server redis.conf
+	# 启动7005
+	cd /root/redis-cluster/7005/bin;redis-server redis.conf
+	# 启动7006
+	cd /root/redis-cluster/7006/bin;redis-server redis.conf
+	# 启动7007
+	cd /root/redis-cluster/7007/bin;redis-server redis.conf
+	# 启动7008
+	cd /root/redis-cluster/7008/bin;redis-server redis.conf
+	 
+	# 启动指令
+	cd /root/redis-cluster/;bash start-local-redis-cluster.sh
+
+	5、进入客户端
+	# 进入客户端(集群模式)
+	/root/redis-cluster/7001/bin/redis-cli -h linux121 -p 7001 -c
+
+	6、创建stop.sh，关闭所有的实例（7001~7008）
+	# 编写群起脚本
+	cd /root/redis-cluster/;vi stop-local-redis-cluster.sh
+	# 关闭7001
+	cd /root/redis-cluster/7001/bin;redis-cli -h linux121 -p 7001 shutdown
+	# 关闭7002
+	cd /root/redis-cluster/7002/bin;redis-cli -h linux121 -p 7002 shutdown
+	# 关闭7003
+	cd /root/redis-cluster/7003/bin;redis-cli -h linux121 -p 7003 shutdown
+	# 启关闭7004
+	cd /root/redis-cluster/7004/bin;redis-cli -h linux121 -p 7004 shutdown
+	# 关闭7005
+	cd /root/redis-cluster/7005/bin;redis-cli -h linux121 -p 7005 shutdown
+	# 关闭7006
+	cd /root/redis-cluster/7006/bin;redis-cli -h linux121 -p 7006 shutdown
+	# 关闭7007
+	cd /root/redis-cluster/7007/bin;redis-cli -h linux121 -p 7007 shutdown
+	# 关闭7008
+	cd /root/redis-cluster/7008/bin;redis-cli -h linux121 -p 7008 shutdown
+	 
+	# Redis集群关闭指令
+	cd /root/redis-cluster/;bash stop-local-redis-cluster.sh
+
+3、能够通过JedisCluster向RedisCluster添加数据和取出数据。
+
+		1、导入依赖jar包
+
+		<dependency>
+		    <groupId>redis.clients</groupId>
+		    <artifactId>jedis</artifactId>
+		    <version>2.9.3</version>
+		</dependency>
+		2、示例代码
+
+		package com.lagou.redis;
+		 
+		import redis.clients.jedis.HostAndPort;
+		import redis.clients.jedis.JedisCluster;
+		import redis.clients.jedis.JedisPoolConfig;
+		 
+		import java.io.IOException;
+		import java.util.HashSet;
+		 
+		public class JedisClutserDemo {
+		 
+		    public static void main(String[] args) throws IOException {
+		        JedisPoolConfig config = new JedisPoolConfig();
+		        HashSet<HostAndPort> jedisClusterNodes = new HashSet<>();
+		 
+		        //添加集群节点
+		        jedisClusterNodes.add(new HostAndPort("linux121",7001));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7002));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7003));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7004));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7005));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7006));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7007));
+		        jedisClusterNodes.add(new HostAndPort("linux121",7008));
+		 
+		        //获取集群连接
+		        JedisCluster jedisCluster = new JedisCluster(jedisClusterNodes, config);
+		 
+		        //设置值
+		        jedisCluster.set("name:001","zhangfei");
+		 
+		        //获取值
+		        String value = jedisCluster.get("name:001");
+		        System.out.println(value);
+		 
+		        //关闭连接
+		        jedisCluster.close();
+		    }
+		 
+		}
+		3、运行结果
+		zhangfei
+		Process finished with exit code 0
