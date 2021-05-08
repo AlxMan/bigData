@@ -1,1 +1,98 @@
+实现步骤
 
+1、安装依赖
+# 1.安装git
+yum install -y git
+# 2.安装相关依赖
+yum install -y gcc gcc-c++ zlib zlib-devel openssl openssl-devel pcre pcre-devel
+# 3.将kafka的客户端源码clone到本地
+cd /opt/wxc/software
+git clone https://github.com/edenhill/librdkafka
+# 4.编译
+./configure
+make && make install
+
+2、下载Nginx
+wget http://nginx.org/download/nginx-1.18.0.tar.gz
+# 解压
+tar -zxf nginx-1.18.0.tar.gz
+
+3、下载ngx_kafka_module
+cd /opt/wxc/software
+git clone https://github.com/brg-liuwei/ngx_kafka_module
+# 进入到nginx的源码包目录下   （编译nginx，然后将插件同时编译）
+cd /opt/wxc/software/nginx-1.18.0
+./configure --add-module=/opt/wxc/software/ngx_kafka_module/
+make && make install
+4、启动zookeeper和kafka，提前创建收集日志的topic，并启动消费者
+kafka-topics.sh --zookeeper linux121:2181/myKafka --create --topic tp_individual --partitions 3 --replication-factor 2
+kafka-console-consumer.sh --bootstrap-server linux121:9092 --topic tp_individual --from-beginning
+
+5、修改nginx.conf
+vim /usr/local/nginx/conf/nginx.conf
+
+6、启动nginx，向nginx发送数据，测试
+curl linux121:81/kafka/log -d "test mykafka" -v
+
+7.准备jquery-3.4.1.min.js，创建HTML页面Index.html，并用jQuery实现收集日志的逻辑
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<script src="./jquery-3.4.1.min.js"></script>
+<body>
+  <input id="user_id" type="text" value="user_001" hidden="hidden">
+  <input id="job_code" type="text" value="code001" hidden="hidden">
+  <button id="click" class="action" act_type="click">点击</button>
+  <button id="collect" class="action" act_type="job_collect">收藏</button>
+  <button id="send" class="action" act_type="cv_send">投简历</button>
+  <button id="upload" class="action" act_type="cv_upload">上传简历</button>
+  <label id="label"></label>
+  </body>
+  <style>
+      .action {
+          height: 30px;
+          font-family: 微软雅黑;
+          font-size: 14px;
+          color: aliceblue;
+          border: none;
+          border-radius: 4px;
+      }
+ 
+      #click {
+          background-color: cadetblue;
+      }
+ 
+      #collect {
+          background-color: cornflowerblue;
+      }
+ 
+      #send {
+          background-color: coral;
+      }
+ 
+      #upload {
+          background-color: indianred;
+      }
+  </style>
+  <script>
+      $(document).ready(function () {
+          $(".action").click(function () {
+              var user_id = $("#user_id").val();
+              var act_time = new Date();
+              var action = this.getAttribute("act_type")
+              var job_code = $("#job_code").val();
+              var log = user_id + "\t" + act_time + "\t" + action + "\t" + job_code;
+              $.ajax({
+                  url: "http://linux121:81/kafka/log",
+                  type: "POST",
+                  dataType: "json",
+                  data: log
+              })
+          });
+      })
+  </script>
+</html>
