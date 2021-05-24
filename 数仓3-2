@@ -1,0 +1,338 @@
+一、数据准备
+1.用拉链表实现核心交易分析中DIM层商家维表，并实现该拉链表的回滚（自己构造数据，编写SQL，并要有相应的文字说明）
+
+-- 创建商家信息维表
+drop table if exists dim.dim_trade_shops;
+create table dim.dim_trade_shops(
+  `shopid` int COMMENT '商铺ID',
+  `userid` int COMMENT '商铺负责人', 
+  `areaid` int COMMENT '区域ID',
+  `shopname` string COMMENT '商铺名称',
+  `shoplevel` int COMMENT '商铺等级',
+  `status` int COMMENT '商铺状态',
+  `createtime` string COMMENT '创建日期',
+  `modifytime` string COMMENT  '修改日期',
+  `startdate` string  COMMENT '生效起始日期',
+  `enddate` string  COMMENT '失效结束日期'
+) COMMENT '商家信息表';
+ 
+--创建商家信息表(增量表 分区表)
+drop table if exists ods.ods_trade_shops;
+create table ods.ods_trade_shops(
+  `shopid` int COMMENT '商铺ID',
+  `userid` int COMMENT '商铺负责人', 
+  `areaid` int COMMENT '区域ID',
+  `shopname` string COMMENT '商铺名称',
+  `shoplevel` int COMMENT '商铺等级',
+  `status` int COMMENT '商铺状态',
+  `createtime` string COMMENT '创建日期',
+  `modifytime` string COMMENT  '修改日期'
+) COMMENT '商家信息表'
+PARTITIONED BY (`dt` string)
+row format delimited fields terminated by ',';
+
+
+
+2.数据准备
+	/root/data/shops/shop-2020-11-20.dat
+	100050,1,100225,WSxxx营超市,1,1,2020-06-28,2020-11-20 13:22:22
+	100052,2,100236,新鲜xxx旗舰店,1,1,2020-06-28,2020-11-20 13:22:22
+	100053,3,100011,华为xxx旗舰店,1,1,2020-06-28,2020-11-20 13:22:22
+	100054,4,100159,小米xxx旗舰店,1,1,2020-06-28,2020-11-20 13:22:22
+	100055,5,100211,苹果xxx旗舰店,1,1,2020-06-28,2020-11-20 13:22:22
+ 
+	/root/data/shops/shop-2020-11-21.dat
+	100057,7,100311,三只xxx鼠零食,1,1,2020-06-28,2020-11-21 13:22:22
+	100058,8,100329,良子xxx铺美食,1,1,2020-06-28,2020-11-21 13:22:22
+	100054,4,100159,小米xxx旗舰店,2,1,2020-06-28,2020-11-21 13:22:22
+	100055,5,100211,苹果xxx旗舰店,2,1,2020-06-28,2020-11-21 13:22:22
+ 
+	/root/data/shops/shop-2020-11-22.dat
+	100059,9,100225,乐居xxx日用品,1,1,2020-06-28,2020-11-22 13:22:22
+	100060,10,100211,同仁xxx大健康,1,1,2020-06-28,2020-11-22 13:22:22
+	100052,2,100236,新鲜xxx旗舰店,1,2,2020-06-28,2020-11-22 13:22:22
+
+3.加载数据到增量表（2020-11-20）
+load data local inpath '/root/data/shops/shop-2020-11-20.dat' into table ods.ods_trade_shops partition(dt='2020-11-20');
+
+
+
+ 4.初始化拉链表数据（2020-11-20）
+ insert overwrite table dim.dim_trade_shops 
+ select shopid, userid, areaid, shopname, shoplevel, 
+        status, createtime, modifytime,
+        case when modifytime is not null then substr(modifytime,0,10)
+             else substr(createtime,0,10) end as startdate,
+        '3000-12-31' as enddate
+        from ods.ods_trade_shops
+        where dt ='2020-11-20';
+
+5.导入2020-11-21 的数据，更新拉链表数据
+
+load data local inpath '/root/data/shops/shop-2020-11-21.dat' into table ods.ods_trade_shops partition(dt = '2020-11-21');
+ 
+insert overwrite table dim.dim_trade_shops
+   select shopid, userid, areaid, shopname,
+          shoplevel, status, createtime, modifytime,
+          CASE WHEN modifytime is not null THEN substr(modifytime,0,10)
+               ELSE  substr(createtime,0,10) END AS startdate,
+          '3000-12-31' AS enddate
+          from ods.ods_trade_shops where dt = '2020-11-21'
+   union all
+   select b.shopid, b.userid ,b.areaid , b.shopname, b.shoplevel,
+          b.status, b.createtime, b.modifytime, b.startdate,
+          CASE WHEN a.shopid is not null and b.enddate ='3000-12-31' 
+               THEN date_add('2020-11-21',-1) 
+               ELSE b.enddate end as enddate
+          from (select * from ods.ods_trade_shops where dt='2020-11-21') a
+          right join dim.dim_trade_shops b on a.shopid = b.shopid;
+
+6.导入2020-11-22 的数据，更新拉链表数据
+load data local inpath '/root/data/shops/shop-2020-11-22.dat' into table ods.ods_trade_shops partition(dt = '2020-11-22');
+ 
+insert overwrite table dim.dim_trade_shops
+   select shopid, userid, areaid, shopname,
+          shoplevel, status, createtime, modifytime,
+          CASE WHEN modifytime is not null THEN substr(modifytime,0,10)
+               ELSE  substr(createtime,0,10) END AS startdate,
+          '3000-12-31' AS enddate
+          from ods.ods_trade_shops where dt = '2020-11-22'
+   union all
+   select b.shopid, b.userid ,b.areaid , b.shopname, b.shoplevel,
+          b.status, b.createtime, b.modifytime, b.startdate,
+          CASE WHEN a.shopid is not null and b.enddate ='3000-12-31' 
+               THEN date_add('2020-11-22',-1) 
+               ELSE b.enddate end as enddate
+          from (select * from ods.ods_trade_shops where dt='2020-11-22') a
+          right join dim.dim_trade_shops b on a.shopid = b.shopid;
+
+7.创建加载商家信息表的数据脚本
+#!/bin/bash
+source /etc/profile
+if [ -n "$1" ]
+then
+  do_date=$1
+else
+  do_date=`date -d "-1 day" +%F`
+fi
+ 
+sql="
+insert overwrite table dim.dim_trade_shops
+   select shopid, userid, areaid, shopname,
+          shoplevel, status, createtime, modifytime,
+          CASE WHEN modifytime is not null THEN substr(modifytime,0,10)
+               ELSE  substr(createtime,0,10) END AS startdate,
+          '3000-12-31' AS enddate
+          from ods.ods_trade_shops where dt = '$do_date'
+   union all
+   select b.shopid, b.userid ,b.areaid , b.shopname, b.shoplevel,
+          b.status, b.createtime, b.modifytime, b.startdate,
+          CASE WHEN a.shopid is not null and b.enddate ='3000-12-31' 
+               THEN date_add('$do_date',-1) 
+               ELSE b.enddate end as enddate
+          from (select * from ods.ods_trade_shops where dt='$do_date') a
+          right join dim.dim_trade_shops b on a.shopid = b.shopid;
+"
+hive -e "$sql"
+
+
+8.拉链表回滚实现
+drop table if exists tmp.shops_tmp;
+create table if not exists tmp.tmp_shops as
+   select shopid, userid, areaid, shopname,
+          shoplevel, status, createtime, 
+          modifytime, startdate, enddate
+        from dim.dim_trade_shops
+        where enddate < '2020-11-21'
+    union all
+    select shopid, userid, areaid, shopname,
+           shoplevel, status, createtime,
+           modifytime, startdate, '3000-12-31' as enddate
+         from dim.dim_trade_shops
+         where startdate <= '2020-11-21' and enddate >= '2020-11-21';
+ 
+insert overwrite table dim.dim_trade_shops select * from tmp.tmp_shops;
+
+
+8.1 shell脚本
+
+#!/bin/bash
+source /etc/profile
+if [ -n "$1" ]
+then
+  do_date=$1
+else
+  do_date=`date -d "-1 day" +%F`
+fi
+ 
+sql="
+drop table if exists tmp.shops_tmp;
+create table if not exists tmp.tmp_shops as
+   select shopid, userid, areaid, shopname,
+          shoplevel, status, createtime, 
+          modifytime, startdate, enddate
+        from dim.dim_trade_shops
+        where enddate < '$do_date'
+    union all
+    select shopid, userid, areaid, shopname,
+           shoplevel, status, createtime,
+           modifytime, startdate, '3000-12-31' as enddate
+         from dim.dim_trade_shops
+         where startdate <= '$do_date' and enddate >= '$do_date';
+ 
+insert overwrite table dim.dim_trade_shops select * from tmp.tmp_shops;
+"
+hive -e "$sql"
+
+
+二、计算沉默会员数和流失会员数
+1.计算沉默会员
+
+-- 先获取只启动一次的会员 在过滤出当前会员的登陆时间小于七天前的日期
+select count(*) clientNum from dws.dws_member_start_day where dt <= date_add(current_date,-7) and device_id in(select device_id from (select device_id, count(*) cnt from dws.dws_member_start_day group by device_id having cnt = 1) tmp);
+
+ 2.计算流失会员
+
+select count(distinct device_id) lossNum from dws.dws_member_start_day where device_id not in (select distinct device_id from dws.dws_member_start_day where dt >=date_add(current_date,30))	
+
+三、销售指标统计
+先统计每天的销售订单笔数和每日订单总额
+订单状态 -3 用户拒收 -2未付款的订单 -1用户取消 0 待发货 1配送中 2用户确认收货
+订单有效标志 -1 删除 1 有效
+drop table if exists dws.dws_trade_orders_day;
+create table if not exists dws.dws_trade_orders_day(
+  day_dt string comment '日期：yyyy-MM-dd',
+  day_cnt decimal commnet '日订单笔数',
+  day_sum decimal comment '日订单总额'
+) comment '日订单统计表';
+select dt, count(*) cnt,sum(totalMoney) sm from (select distinct orderid,dt,totalMoney from dwd.dwd_trade_orders where status >= 0 and dataFlag = '1') tmp group by dt;
+insert overwrite table dws.dws_trade_orders_day select dt, count(*) cnt, sum(totalMoney) sm from (select distinct orderid, dt, totalMoney from dwd.dwd_trade_orders where status >= 0 and dataFlag = '1') tmp group by dt;
+select * from dws.dws_trade_orders_day where day_dt between '2020-01-01' and '2020-12-31';
+
+1.统计2020年每个季度的销售订单笔数、订单总额
+
+drop table if exists dws.dws_trade_orders_quarter;
+create table if not exists dws.dws_trade_orders_quarter(
+year string comment '年份',
+quarter string comment '季度',
+cnt decimal comment '订单总笔数',
+sum decimal comment '订单总额'
+) comment '季度订单统计表';
+ 
+insert overwrite table dws.dws_trade_orders_quarter
+ 
+with tmp as(
+   select substr(day_dt,0,4) year,
+          case when substr(dat_dt,6,2)="01" or substr(dat_dt,6,2)="02" or 
+          substr(day_dt,6,2)="03" then "1" 
+               when substr(dat_dt,6,2)="04" or substr(dat_dt,6,2)="05" or 
+          substr(day_dt,6,2)="06" then "2"
+               when substr(dat_dt,6,2)="07" or substr(dat_dt,6,2)="08" or 
+          substr(day_dt,6,2)="09" then "3"
+               when substr(dat_dt,6,2)="10" or substr(dat_dt,6,2)="11" or 
+          substr(day_dt,6,2)="12" then "4" as quarter 
+          day_cnt,day_sum
+          from  dws.dws_trade_orders_day)
+select year,quarter,sum(day_cnt),sum(day_sum) from tmp group by year quarter;
+
+
+2.统计2020年每个月的销售订单笔数，订单总额
+drop table if exists dws.dws_trade_orders_month;
+create table if not exists dws.dws_trade_orders_month(
+yearstring comment '年份',
+month string comment '月份',
+month_cnt decimal comment '月订单总笔数',
+month_sum decimal comment '月订单总额'
+) comment '月订单统计表';
+ 
+insert overwrite table dws.dws_trade_orders_month 
+with tmp as(
+            select substr(day_dt,0,4) year,
+                   sunstr(day_dt,6,2) month,
+                   day_cnt, day_sum 
+                from dws.dws_trade_orders_day)
+select year,month,sum(day_cnt) month_cnt,sum(day_sum) month_sum
+   from tmp group by year,month;
+
+
+
+3.统计2020年每周（周一到周日）的销售订单笔数，订单总额，设计自定函数，用于祭祀日期属于第几周
+1.创建maven工程，添加依赖
+<groupId>org.apache.hive</groupId>
+<artifactId>hive-exec</artifactId>
+<version>2.3.7</version>
+
+2.新建WeekOfYear类，继承UDF ，实现evaluate
+
+public IntWriteble evaluate(final Text datestr){
+  String today = datestr.toString();
+  SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
+  Date date = null;
+  
+  try{
+     date = formar.parse(today);
+  } catch(ParseExecption e){
+     e.printStackTrace();
+  }
+  
+  Calendar calendar = Calendar.getInstance();
+ 
+  calendar.setFirstDayOfWeek(Calendar.MONDAY);
+  
+  calendar.setTime(date);
+ 
+  int i = calendar.get(Calendar.WEEK_OF_YEAR);
+ 
+  return new IntWritable(i);
+}
+
+3.将项目打包，并上传至服务器
+4.添加jar包到hive, 创建临时函数，即可使用
+add jar /root/data/jars/udf-weekofyear-1.0-SANPSHOT.jar;
+create temporary function weekofyear as "com.haozhen.udf.WeekOfYear";
+
+5.编写相关sql
+drop table if exists dws.dws_trade_orders_week;
+create table if not exists dws.dws_trade_orders_week(
+ year string comment '年份',
+ week string comment '一年中的第几周',
+ week_cnt decimal comment '周订单总笔数',
+ week_sum decimal comment '周订单总额'
+) comment '周订单统计表';
+ 
+insert overwrite table dws.dws_trade_orders_week
+    select substr(day_dt,0,4) year,
+           weekofyear(day_dt) week,
+           sum(day_cnt), sum(day_sum)
+       from dws.dws_trade_orders_day group by substr(day_dt,0,4) year,
+           weekofyear(day_dt) week;
+
+
+统计2020国家法定节假日、休息日、工作日的订单笔数、订单总额
+1.创建日期信息维表，记录日期是否是节假日，工作日
+drop table if exists dim.dim_day_info;
+create table if not exists dim.dim_day_info(
+  day_dt string comment '日期',
+  is_holidays int comment '节假日标识： 0不是 1是',
+  is_workday int comment '工作日标识 0不是 1是'
+) comment '日期信息表';
+2.初始化日期信息表
+3.根据日期信息维表和日订单统计表统计
+-- 统计2020节假日的订单笔数，订单总额
+select nvl(sum(day_cnt),0) nvl(sum(day_sum),0) from
+dws.dws_trade_orders_day A left join dim.dim_day_info B on A.day_dt = B.day_dt where B.is_holiday = 1;
+ 
+-- 统计2020年休息日的订单笔数，订单总额
+select nvl(sum(day_cnt),0) nvl(sum(day_sum),0) from
+dws.dws_trade_orders_day A left join dim.dim_day_info B on A.day_dt = B.day_dt where B.is_workday = 0;
+ 
+-- 统计2020节工作日的订单笔数，订单总额
+select nvl(sum(day_cnt),0) nvl(sum(day_sum),0) from
+dws.dws_trade_orders_day A left join dim.dim_day_info B on A.day_dt = B.day_dt where B.is_workday = 1;
+
+
+
+
+
+
+
