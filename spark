@@ -1,0 +1,434 @@
+1、找到ip所属区域
+package cn.lagou.zuoye
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.SparkConf
+object HomeWork1 {
+  def main(args: Array[String]): Unit = {
+    // 初始化,框架代码
+    val conf = new SparkConf().setAppName(this.getClass.getCanonicalName).setMaster("local[*]")
+    val spark: SparkSession = SparkSession.builder()
+      .config(conf)
+      .getOrCreate()
+    // 设置日志级别
+    spark.sparkContext.setLogLevel("WARN")
+
+    // 养成习惯导入
+    import spark.implicits._
+    // 获取ip访问信息表，只获取第一列ip数据，数据类型是DataSet
+    spark.read
+      // 分隔符为 |
+      .option("delimiter", "|")
+      // 读取文件
+      .csv("data/http.log")
+      // 将第一列ip取出
+      .map(row => row.getString(1))
+      // 创建临时表
+      .createOrReplaceTempView("t1")
+
+    // 获取ip配置表，这里是数组，收回来，并且做成了广播变量
+    val ipData: Array[(Long, Long, String)] = spark.read
+      // 分隔符为 |
+      .option("delimiter", "|")
+      // 读取文件
+      .csv("data/ip.dat")
+      // 获取ip范围和对应地址
+      .map(row => (row.getString(2).toLong, row.getString(3).toLong, row.getString(6)))
+      // 收回来
+      .collect()
+    // 变成广播变量，顺便排个序
+    val ipBC = spark.sparkContext.broadcast(ipData.sortBy(_._1))
+
+    // IP地址是一个32位的二进制数，通常被分割为4个“8位二进制数”（也就是4个字节）。
+    // IP地址通常用“点分十进制”表示成（a.b.c.d）的形式，其中，a,b,c,d都是0~255之间的十进制整数。
+    // 例：点分十进IP地址（100.4.5.6），实际上是32位二进制数（01100100.00000100.00000101.00000110）
+    // 32位二进制数就是4个字节，4个字节就是个int，当然也能变成long
+    // 位运算是一种实现思路
+    def ip2Long(ip: String): Long = {
+      ip.split("\\.")
+        .map(_.toLong)
+        .fold(0L) { (buffer, elem) =>
+          buffer << 8 | elem
+        }
+    }
+
+    // 通过查询ip在哪个ip范围内，确定地址
+    def getCityName(ip: Long): String = {
+      // 获取广播变量
+      val ips: Array[(Long, Long, String)] = ipBC.value
+      // 对广播变量进行二分查找，因为广播变量之前已经做过排序
+      var start = 0
+      var end = ips.length - 1
+      var middle = 0
+
+      // 正常的二分查找，排序查找算法有很多啦
+      while (start <= end) {
+        middle = (start + end) / 2
+        if ((ip >= ips(middle)._1) && (ip <= ips(middle)._2))
+          return ips(middle)._3
+        else if (ip < ips(middle)._1)
+          end = middle - 1
+        else
+          start = middle + 1
+      }
+      "Unknown"
+    }
+    // 注册udf函数为下面sql使用
+    spark.udf.register("ip2Long", ip2Long _)
+    spark.udf.register("getCityName", getCityName _)
+    // 普通的sql查询
+    spark.sql(
+      """
+        |select getCityName(ip2Long(value)) as provice, count(1) as no
+        |  from t1
+        |group by getCityName(ip2Long(value))
+        |""".stripMargin).show
+
+    spark.close()
+  }
+}
+
+
+2、日志分析
+package cn.lagou.zuoye
+
+import org.apache.spark.rdd.RDD
+
+import java.util.regex.{Matcher, Pattern}
+import org.apache.spark.{SparkConf, SparkContext}
+
+object HomeWork2 {
+  // 属于视频的网址
+  val ipPattern = Pattern.compile("""(\S+) .+/(\S+\.mp4) .*""")
+  // 正常返回的请求
+  val flowPattern = Pattern.compile(""".+ \[(.+?) .+ (200|206|304) (\d+) .+""")
+
+  def main(args: Array[String]): Unit = {
+    // 初始化,框架代码
+    val conf = new SparkConf().setAppName("HomeWork2").setMaster("local[*]")
+    val sc = new SparkContext(conf)
+    // 设置日志级别
+    sc.setLogLevel("WARN")
+
+    // 读取日志文件，获取每行数据格式的rdd
+    val logRDD: RDD[String] = sc.textFile("data/cdn.txt")
+
+    // 获取第一列中的ip，并统计该ip出现的总数，降序排列
+    val ipRDD: RDD[(String, Int)] = logRDD.map(line => (line.split("\\s+")(0), 1))
+      .reduceByKey(_ + _)
+      .sortBy(_._2, false)
+
+    // 打印相关信息
+    println("ip出现次数，降序排列前十:")
+    ipRDD.take(10).foreach(println)
+    println(s"独立IP总数：${ipRDD.count()}")
+
+//////////////////////////////////
+
+    // 查找请求属于视频请求的行
+    val videoIpRDD: RDD[((String, String), Int)] = logRDD.map(line => {
+      val matchFlag: Matcher = ipPattern.matcher(line)
+      if (matchFlag.matches()) {
+        // 正则匹配，获取视频名称，获取地址
+        ((matchFlag.group(2), matchFlag.group(1)), 1)
+      } else
+        (("", ""), 0)
+    })
+
+    println("视频独立IP数，降序排列前十：")
+    // 过滤无效数据
+    videoIpRDD.filter { case ((video, ip), count) => video != "" && ip != "" && count != 0 }
+      // 对视频数据进行统计数量
+      .reduceByKey(_ + _)
+      // 因为已经过滤掉无效数据，这里key更换为视频名称
+      .map { case ((video, _), _) => (video, 1) }
+      // 相同的视频不同的ip这里再次做统计，因为查询的是视频的访问量
+      .reduceByKey(_ + _)
+      // 根据访问数进行统计
+      .sortBy(_._2, false)
+      // 取前十
+      .take(10)
+      .foreach(println)
+    println(s"视频独立IP总数：${videoIpRDD.count()}")
+    
+//////////////////////////////////
+    
+    // 正则获取每行数据的当前小时和响应大小
+    val flowRDD: RDD[(String, Long)] = logRDD.map(line => {
+      val matchFlag = flowPattern.matcher(line)
+      if (matchFlag.matches())
+        (matchFlag.group(1).split(":")(1), matchFlag.group(3).toLong)
+      else
+        ("", 0L)
+    })
+    
+    println("每小时流量:")
+    flowRDD.filter { case (hour, flow) => flow != 0 }
+      // 数据量很小，可以收到一个分区中做reduce，然后转为集合操作效率高
+      .reduceByKey(_ + _, 1)
+      .collectAsMap()
+      // 响应大小更换单位为 g
+      .mapValues(_ / 1024 / 1024 / 1024)
+      .toList
+      // 根据小时排序
+      .sortBy(_._1)
+      .foreach { case (k, v) => println(s"${k}时 CDN流量${v}G") }
+
+    sc.stop()
+  }
+}
+
+
+3、用Spark-Core实现统计每个adid的曝光数与点击数，将结果输出到hdfs文件；输出文件结构为adid、曝光数、点击数。注意：数据不能有丢失（存在某些adid有imp，没有clk；或有clk没有imp）你的代码有多少个shuffle，是否能减少？（提示：仅有1次shuffle是最优的）
+1、如果读点击日志，生成rdd，并同时reduce计算adid的点击数，这里会有一个suffer。同理相同操作在曝光日志中也有一个suffer。最后将两个数据进行join求交集也会有一个suffer。则此时有三个suffer。
+2、如果在读日志中只对日志进行map操作，不做reduce操作。将所有的reduce操作放在join阶段，则此时只有一个suffer。
+package cn.lagou.zuoye
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+class HomeWork3 {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf().setAppName("HomeWork3").setMaster("local")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("warn")
+
+    val clickLog = sc.textFile("data/click.log")
+    val impLog = sc.textFile("data/imp.log")
+
+    // 读文件
+    val clkRDD = clickLog.map { line =>
+      val arr = line.split("\\s+")
+      val adid = arr(3).substring(arr(3).lastIndexOf("=") + 1)
+      (adid, (1, 0))
+    }
+
+    // 读文件
+    val impRDD = impLog.map { line =>
+      val arr = line.split("\\s+")
+      val adid = arr(3).substring(arr(3).lastIndexOf("=") + 1)
+      (adid, (0, 1))
+    }
+
+    // join
+    val RDD: RDD[(String, (Int, Int))] = clkRDD.union(impRDD)
+      .reduceByKey((x, y) => (x._1 + y._1, x._2 + y._2))
+
+    // 写hdfs
+    RDD.saveAsTextFile("hdfs://linux121:9000/data/")
+
+    sc.stop()
+  }
+}
+
+
+4、使用鸢尾花数据集实现KNN算法
+package cn.lagou.zuoye
+
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+import scala.math.{pow, sqrt}
+
+object HomeWork4 {
+
+  // 标签点
+  case class LabelPoint(label: String, point: Array[Double])
+
+  def main(args: Array[String]): Unit = {
+    // 1、初始化
+    val conf = new SparkConf()
+      .setAppName(s"${this.getClass.getCanonicalName}")
+      .setMaster("local[*]")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("WARN")
+
+    // 标准设置为9
+    val K = 9
+
+    // 2、读数据，封装数据
+    val lines = sc.textFile("data/IrisKNN.csv")
+      .map(line => {
+        val fields = line.split(",")
+        if (fields.length==5)
+          LabelPoint("", fields.tail.map(_.toDouble))
+        else
+          LabelPoint(fields.last, fields.init.tail.map(_.toDouble))
+      })
+
+    // 3、将数据分为样本数据、测试数据
+    val sampleRDD: RDD[LabelPoint] = lines.filter(_.label != "")
+    val testData: Array[Array[Double]] = lines.filter(_.label == "").collect().map(_.point)
+
+    // 计算距离
+    def getDistance(x: Array[Double], y: Array[Double]): Double = {
+      sqrt(x.zip(y).map(z => pow(z._1 - z._2, 2)).sum)
+    }
+
+    // 4、求最近的K个点；对这K个点的label做wordcount，得到最终结果
+    testData.foreach(elem => {
+      // 获取所有距离
+      val dists: RDD[(Double, String)] = sampleRDD.map(labelpoint => (getDistance(elem, labelpoint.point), labelpoint.label))
+      // 获取前九个
+      val minDists: Array[(Double, String)] = dists.sortBy(_._1).take(K)
+      // 是什么标签
+      val labels: Array[String] = minDists.map(_._2)
+      print(s"${elem.toBuffer} : ")
+      // 最终结果预测
+      labels.groupBy(x=>x).mapValues(_.length).foreach(print)
+      println()
+    })
+
+    sc.stop()
+  }
+}
+
+5、使用鸢尾花数据集实现KMeans算法
+ackage com.lagou.spark.anwser
+
+import scala.math.{pow, sqrt}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+/**
+ * kmeans实现步骤：
+ * 1、读数据、封装数据
+ * 2、随机选择K个点
+ * 3、计算所有点到K个点的距离
+ * 4、遍历所有点，对每个点找距离最小的点，离谁最近就属于哪个分类
+ * 5、计算K个分类的中心点
+ * 6、计算新旧中心是否发生移动
+ * 7、没有移动结束循环，否则转步骤3
+ */
+object HomeWork5_KMeans {
+  case class LablePoint(label: String, point: Array[Double])
+
+  def main(args: Array[String]) {
+    // K : 分类的个数；minDist : 中心点移动的最小距离，迭代终止条件；两个参数最好从命令行传进来
+    val K = 3
+    val minDist = 0.001
+
+    val conf = new SparkConf().setMaster("local[*]").setAppName("KMeans")
+    val sc = new SparkContext(conf)
+    sc.setLogLevel("WARN")
+
+    // 1、读文件，封装数据
+    val lines = sc.textFile("data/irisKMeans.csv")
+    val data: RDD[LablePoint] = lines.filter(_.trim.size != 0)
+      .map(line => {
+        val fields = line.split(",")
+        LablePoint(fields.last, fields.init.tail.map(_.toDouble))
+      })
+    data.cache()
+    data.foreach(x=>println(x.label, x.point.toBuffer))
+
+    // 2、获得K个随机的中心点
+    val centerPoints: Array[Array[Double]] = data.takeSample(withReplacement = false, K).map(_.point)
+    var tempDist = 1.0
+
+    while(tempDist > minDist) {
+      // 3、计算所有点到K个点的距离；
+      // 得到每个点的分类 [分类编号, (特征, 1.0)]；1.0 在后面计算中心点时用于计数
+      val indexRDD: RDD[(Int, (Array[Double], Double))] = data.map(p => (getIndex(p.point, centerPoints), (p.point, 1.0)))
+
+      // 计算新的中心点
+      def arrayAdd(x: Array[Double], y: Array[Double]): Array[Double] = x.zip(y).map(elem => elem._1 + elem._2)
+
+      // 将所用的点按照计算出的分类计算
+      val catalogRDD: RDD[(Int, (Array[Double], Double))] = indexRDD.reduceByKey((x, y) =>
+        (arrayAdd(x._1, y._1), x._2 + y._2)
+      )
+
+      // 计算新的中心点
+      val newCenterPoints: collection.Map[Int, Array[Double]] =
+        catalogRDD.map{ case (index, (point, count)) => (index, point.map(_ / count)) }
+          .collectAsMap()
+
+      // 计算中心点移动的距离
+      val dist = for (i <- 0 until K) yield {
+        getDistance(centerPoints(i), newCenterPoints(i))
+      }
+      tempDist = dist.sum
+
+      // 重新定义中心点
+      for ((key, value) <- newCenterPoints) {
+        centerPoints(key) = value
+      }
+      println("distSum = " + tempDist + "")
+    }
+
+    // 打印结果
+    println("Final centers:")
+    centerPoints.foreach(x => println(x.toBuffer))
+
+    sc.stop()
+  }
+
+  private def getDistance(x: Array[Double], y: Array[Double]): Double = {
+    sqrt(x.zip(y).map(elem => pow(elem._1 - elem._2, 2)).sum)
+  }
+
+  private def getIndex(p: Array[Double], centers: Array[Array[Double]]): Int = {
+    val dist = centers.map(point => getDistance(point, p))
+    dist.indexOf(dist.min)
+  }
+}
+
+6、
+package cn.lagou.zuoye
+
+import org.apache.spark.SparkConf
+import org.apache.spark.sql.expressions.{Window, WindowSpec}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+
+object HomeWork6 {
+  def main(args: Array[String]): Unit = {
+    // 初始化,框架代码
+    val spark = SparkSession
+      .builder()
+      .appName("HomeWork6")
+      .master("local[*]")
+      .getOrCreate()
+    val sc = spark.sparkContext
+    // 设置日志级别
+    sc.setLogLevel("warn")
+
+    // 养成习惯导入
+    import org.apache.spark.sql.functions._
+    import spark.implicits._
+    // 初始数据导入,这里是集合变df
+    val df: DataFrame = List("1 2019-03-04 2020-02-03", "2 2020-04-05 2020-08-04", "3 2019-10-09 2020-06-11").toDF()
+
+    // DSL方式
+    // 窗口操作
+    val w1: WindowSpec = Window.orderBy($"value" asc).rowsBetween(0, 1)
+    df.as[String]
+      // 去除前面序号
+      .map(str => str.split(" ")(1) + " " + str.split(" ")(2))
+      // 开始结束时间切分
+      .flatMap(str => str.split("\\s+"))
+      // 去重
+      .distinct()
+      // 这里是所有时间的排序
+      .sort($"value" asc)
+      // 每两列输出一行
+      .withColumn("new", max("value") over (w1))
+      .show()
+
+    // SQL方式
+    df.flatMap{ case Row(line: String) =>
+      line.split("\\s+").tail
+    }.toDF("date")
+      .createOrReplaceTempView("t1")
+
+    spark.sql(
+      """
+        |select date, max(date) over (order by date rows between current row and 1 following) as date1
+        |  from t1
+        |""".stripMargin).show
+
+    spark.close()
+  }
+}
+
+
+
+
