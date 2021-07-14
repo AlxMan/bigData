@@ -1,0 +1,166 @@
+package com.wxcWork
+import com.wxcWork.BusInfo
+import org.apache.spark.sql._
+
+object wxcWork {
+  def main(args: Array[String]): Unit = {
+    //1 获取sparksession
+    val spark: SparkSession = SparkSession.builder()
+      .master("local[*]")
+      .appName(RealTimeProcess.getClass.getName)
+      .getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
+    
+    import spark.implicits._
+    //2 定义读取kafka数据源
+    val kafkaDf: DataFrame = spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers", "hadoop2:9092,hadoop3:9092")
+      .option("subscribe", "lg_bus_info")
+      .load()
+    
+    //3 处理数据
+    val kafkaValDf: DataFrame = kafkaDf.selectExpr("CAST(value AS STRING)")
+    //转为ds
+    val kafkaDs: Dataset[String] = kafkaValDf.as[String]
+    //封装为一个case class方便后续获取指定字段的数据
+    val busInfoDs: Dataset[BusInfo] = kafkaDs.map(BusInfo(_)).filter(_ != null)
+
+    //4 将数据写入MySQL表
+    busInfoDs.writeStream
+      .foreach(new JdbcWriter)
+      .outputMode("append")
+      .start()
+      .awaitTermination()
+  }
+}
+
+
+
+建表语句：
+CREATE TABLE car_gps(
+id bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '自增id',
+deployNum VARCHAR(255) COMMENT '调度编号',
+plateNum VARCHAR(255) COMMENT '车牌号',
+timeStr VARCHAR(255) COMMENT '时间戳',
+lng VARCHAR(255) COMMENT '经度',
+lat VARCHAR(255) COMMENT '纬度',
+createTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '新增时间',
+PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='位置信息表'
+;
+
+
+
+
+
+scala操作mysql：
+package com.wxcWork
+import java.sql._
+import java.util.Properties
+
+import com.wxcWork.BusInfo
+import org.apache.spark.sql.ForeachWriter
+
+
+class JdbcWriter extends ForeachWriter[BusInfo] {
+  
+  var conn: Connection = _
+  var statement: PreparedStatement = _
+  
+  // 开启链接
+  override def open(partitionId: Long, epochId: Long): Boolean = {
+    if (conn == null) {
+      conn = JdbcWriter.openConnection
+    }
+    true
+  }
+
+  // 关闭链接
+  override def close(errorOrNull: Throwable): Unit = {
+    if (null != conn) conn.close()
+    if (null != statement) statement.close()
+  }
+  
+  // 新增数据
+  override def process(value: BusInfo): Unit = {
+    val arr: Array[String] = value.lglat.split("_")
+    val sql = "insert into car_gps(deployNum,plateNum,timeStr,lng,lat) values(?,?,?,?,?)"
+    statement = conn.prepareStatement(sql)
+    statement.setString(1, value.deployNum)
+    statement.setString(2, value.plateNum)
+    statement.setString(3, value.timeStr)
+    statement.setString(4, arr(0))
+    statement.setString(5, arr(1))
+    statement.executeUpdate()
+  }
+  
+  
+}
+
+object JdbcWriter {
+  // 初始化链接
+  var conn: Connection = _
+  val url = "jdbc:mysql://hadoop1:3306/lg_logstic?useUnicode=true&characterEncoding=utf8"
+  val username = "root"
+  val password = "123456"
+  def openConnection: Connection = {
+    if (null == conn || conn.isClosed) {
+      val p = new Properties
+      Class.forName("com.mysql.jdbc.Driver")
+      conn = DriverManager.getConnection(url, username, password)
+    }
+    conn
+  }
+}
+
+
+
+bean：
+package com.wxcWork
+// lglat获取位置信息
+case class BusInfo(
+                    deployNum: String,
+                    simNum: String,
+                    transportNum: String,
+                    plateNum: String,
+                    lglat: String,
+                    speed: String,
+                    direction: String,
+                    mileage: String,
+                    timeStr: String,
+                    oilRemain: String,
+                    weights: String,
+                    acc: String,
+                    locate: String,
+                    oilWay: String,
+                    electric: String
+                  )
+
+object BusInfo {
+
+  def apply(msg: String): BusInfo = {
+    val arr: Array[String] = msg.split(",")
+    if (arr.length == 15) {
+      BusInfo(
+        arr(0),
+        arr(1),
+        arr(2),
+        arr(3),
+        arr(4),
+        arr(5),
+        arr(6),
+        arr(7),
+        arr(8),
+        arr(9),
+        arr(10),
+        arr(11),
+        arr(12),
+        arr(13),
+        arr(14)
+      )
+    }else{
+      null
+    }
+  }
+}
