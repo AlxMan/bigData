@@ -1,0 +1,273 @@
+
+
+一、创建MergeTree表、实现CRUD
+	1、创建表
+create table mt_table
+(date Date,id UInt8,name String) 
+engine = MergeTree 
+partition by toYYYYMM(date) 
+order by id;
+	2、插入数据
+insert into mt_table values ('2019-05-01', 1, 'zhangsan');
+insert into mt_table values ('2019-06-01', 2, 'lisi');
+insert into mt_table values ('2019-05-03', 3, 'wangwu');
+	3、更新操作
+alter table mt_table update name='bailishouyue' where id =1;
+	4、删除操作
+alter table mt_table delete where id = 2
+	5、查询操作
+select * from mt_table;
+
+
+二、clickhouse连接msql
+1、mysql表
+create table student(
+     id int,
+     name varchar(40),
+     age int);
+insert into student values(1,'zhangsan',12);
+insert into student values(2,'lisi',18);
+2、clickhouse表
+CREATE TABLE mysql_table ( `id` UInt32, `name` String, `age` UInt32 )ENGINE = MySQL('linux123:3306', 'clickhouse', 'student', 'root', '123456');
+三、clickhouse连接kafka
+1、启动kafka并创建主题
+启动：kafka-server-start.sh -daemon config/server.properties
+创建主题：kafka-topics.sh --zookeeper localhost:2181/myKafka --create --topic clickhouseTest --partitions 1 --replication-factor 1
+2、在clickhouse中创建表kafka主题
+CREATE TABLE queue(q_date String,level String,message String) ENGINE=Kafka SETTINGS kafka_broker_list='linux122:9092',kafka_topic_list='clickhouseTest',kafka_group_name='group33',kafka_format='CSV',kafka_num_consumers=1;
+4.创建daily表
+CREATE TABLE daily ( day Date, level String, total UInt64 ) ENGINE = SummingMergeTree(day, (day, level), 8192); 
+5.创建物化视图
+CREATE MATERIALIZED VIEW consumer TO daily AS SELECT q_date as day,level,message FROM queue;
+
+
+三、kudoAPI代码编写
+1、创建表
+package cn.wcb.kudu;
+import org.apache.kudu.ColumnSchema;
+import org.apache.kudu.Schema;
+import org.apache.kudu.Type;
+import org.apache.kudu.client.CreateTableOptions;
+import org.apache.kudu.client.KuduClient;
+import org.apache.kudu.client.KuduException;
+
+import java.util.LinkedList;
+
+public class CreateTable {
+
+    private static ColumnSchema newColumn(String name, Type type, Boolean isKey){
+        ColumnSchema.ColumnSchemaBuilder column =
+                new ColumnSchema.ColumnSchemaBuilder(name, type);
+        column.key(isKey);
+        return column.build();
+    }
+
+    public static void main(String[] args) {
+        //master地址
+        String masterAddr = "192.168.56.56";
+
+        //创建kudu的数据库连接
+        KuduClient client = new KuduClient.KuduClientBuilder(masterAddr)
+                .defaultSocketReadTimeoutMs(6000).build();
+
+        //设置表的schema
+        LinkedList<ColumnSchema> columns = new LinkedList<>();
+
+        /*
+         *和RDBMS不同的是，Kudu不提供自动递增列功能，因此应用程序必须始终
+         * 在插入期间提供完整的主键
+         */
+        columns.add(newColumn("id",Type.INT32,true));
+        columns.add(newColumn("name",Type.STRING,false));
+        Schema schema = new Schema(columns);
+
+        //创建表时提供的所有选项
+        CreateTableOptions options = new CreateTableOptions();
+
+        //设置表的replica备份和分区规则
+        LinkedList<String> parcols = new LinkedList<>();
+        parcols.add("id");
+
+        //设置表的备份数
+        options.setNumReplicas(1);
+
+        //设置hash分区和数量
+        options.addHashPartitions(parcols,3);
+
+        try {
+            client.createTable("student",schema,options);
+        } catch (KuduException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                client.close();
+            } catch (KuduException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+2、删除表
+package cn.wcb.kudu;
+
+import org.apache.kudu.client.KuduClient;
+import org.apache.kudu.client.KuduException;
+
+public class DropTable {
+
+    public static void main(String[] args) {
+        //master地址
+        String masterAddr = "192.168.56.56";
+
+        KuduClient client = new KuduClient.KuduClientBuilder(masterAddr)
+                .defaultSocketReadTimeoutMs(6000).build();
+
+        try {
+            client.deleteTable("student");
+        } catch (KuduException e) {
+            e.printStackTrace();
+        }finally {
+            try {
+                client.close();
+            } catch (KuduException e) {
+                e.printStackTrace();
+            }
+        }
+
+    }
+}
+
+
+3、插入数据
+package cn.wcb.kudu;
+
+import org.apache.kudu.client.*;
+
+public class InsertRow {
+
+    public static void main(String[] args) {
+        //master地址
+        String masterAddr = "192.168.56.56";
+
+        KuduClient client = new KuduClient.KuduClientBuilder(masterAddr)
+                .defaultSocketReadTimeoutMs(6000).build();
+
+        try {
+            KuduTable table = client.openTable("student");
+            KuduSession kuduSession = client.newSession();
+
+            kuduSession.setFlushMode(SessionConfiguration.FlushMode.MANUAL_FLUSH);
+            kuduSession.setMutationBufferSpace(3000);
+            for (int i = 0; i <10 ; i++) {
+                Insert insert = table.newInsert();
+                insert.getRow().addInt("id",i);
+                insert.getRow().addString("name",i+"号");
+                kuduSession.flush();
+                kuduSession.apply(insert);
+            }
+            kuduSession.close();
+        } catch (KuduException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                client.close();
+            } catch (KuduException e) {
+                e.printStackTrace();
+            }
+        }
+
+    }
+}
+
+4、查询数据
+package cn.wcb.kudu;
+
+import org.apache.kudu.client.*;
+
+public class FindRow {
+
+    public static void main(String[] args) {
+        //master地址
+        String masterAddr = "192.168.56.56";
+
+        KuduClient client = new KuduClient.KuduClientBuilder(masterAddr)
+                .defaultSocketReadTimeoutMs(6000).build();
+
+        try {
+            KuduTable table = client.openTable("student");
+
+            //创建scanner扫描
+            KuduScanner scanner = client.newScannerBuilder(table).build();
+
+            //遍历数据
+            while(scanner.hasMoreRows()){
+                for (RowResult rowResult : scanner.nextRows()){
+                    System.out.println(rowResult.getInt("id")
+                    +"\t"+rowResult.getString("name"));
+                }
+            }
+        } catch (KuduException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                client.close();
+            } catch (KuduException e) {
+                e.printStackTrace();
+            }
+        }
+
+    }
+}
+
+5、更新数据
+package cn.wcb.kudu;
+
+import org.apache.kudu.client.*;
+
+public class UpdateRow {
+
+    public static void main(String[] args) {
+        //master地址
+        String masterAddr = "192.168.56.56";
+
+        KuduClient client = new KuduClient.KuduClientBuilder(masterAddr)
+                .defaultSocketReadTimeoutMs(6000).build();
+
+        try {
+            KuduTable table = client.openTable("student");
+            KuduSession session = client.newSession();
+
+            session.setFlushMode(SessionConfiguration.FlushMode.AUTO_FLUSH_SYNC);
+
+            //更新数据
+            Update update = table.newUpdate();
+            PartialRow row = update.getRow();
+            row.addInt("id",1);
+            row.addString("name","didi");
+            session.apply(update);
+
+            session.close();
+        } catch (KuduException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                client.close();
+            } catch (KuduException e) {
+                e.printStackTrace();
+            }
+        }
+
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
