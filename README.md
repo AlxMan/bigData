@@ -52,6 +52,17 @@ bin/logstash -f config/kafka-es.conf
 Kibana操作截图
 
 ![image](https://github.com/AlxMan/bigData/blob/main/02.png)
+![image](https://github.com/AlxMan/bigData/blob/main/03.png)
+![image](https://github.com/AlxMan/bigData/blob/main/04.png)
+![image](https://github.com/AlxMan/bigData/blob/main/05.png)
+![image](https://github.com/AlxMan/bigData/blob/main/06.png)
+![image](https://github.com/AlxMan/bigData/blob/main/07.png)
+![image](https://github.com/AlxMan/bigData/blob/main/08.png)
+![image](https://github.com/AlxMan/bigData/blob/main/09.png)
+![image](https://github.com/AlxMan/bigData/blob/main/10.png)
+![image](https://github.com/AlxMan/bigData/blob/main/11.png)
+![image](https://github.com/AlxMan/bigData/blob/main/12.png)
+
 
 
 
