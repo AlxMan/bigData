@@ -1,11 +1,11 @@
 
  Fliebeat安装
 2.1 下载安装Filebeat
-# 1.下载
+1.下载
 wget https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.3.0-linux-x86_64.tar.gz
-# 2.解压
+2.解压
 tar -zxvf filebeat-7.3.0-linux-x86_64.tar.gz 
-# 3.安装
+3.安装
 mv filebeat-7.3.0-linux-x86_64.tar.gz  filebeat-7.3.0
 
 2.2 修改配置文件
@@ -27,7 +27,7 @@ kafka-topics.sh --create --topic lagou_order --zookeeper linux121:2181/kafka --p
 ./filebeat -e -c filebeat.yml
 3. logstash读取Kafka
 1. logstash配置
-# vim /opt/lagou/servers/Logstash-6.2.0/config/kafka-es.conf
+ vim /opt/lagou/servers/Logstash-6.2.0/config/kafka-es.conf
 input {
   kafka {
     bootstrap_servers => "linux121:9092"
@@ -49,9 +49,9 @@ bin/logstash -f config/kafka-es.conf
 /opt/lagou/data/logs/lagou_orders.json
 
 
+Kibana操作截图
 
-
-
+![image](https://github.com/AlxMan/bigData/blob/main/02.png)
 
 
 
