@@ -1,0 +1,16 @@
+思路：
+实现流程:
+
+确定统计的时间窗口, 即统计最近多长时间的投递次数;
+
+确定统计的时间间隔;
+
+用户的投递行为数据是存储到kafka中, 所以从kafka中读取用户的投递行为;
+
+按照position_id进行group by;
+
+根据position_id, join dim_position表获得city;
+
+选出其中前20-50的职位: 实现方式之一是, 按照city进行group by, 然后排序选择前20-50位;
+
+将结果写入到redis中;
